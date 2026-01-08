@@ -36,7 +36,11 @@ const Tensor = {
     return new Array(rows).fill(0);
   },
 
-  mulT1DT2D(t1dA: Tensor1D, t2dA: Tensor2D): Tensor1D {
+  zeros2D(rows: number, cols: number): Tensor2D {
+    return new Array(rows).fill(0).map(() => new Array(cols).fill(0));
+  },
+
+  mul_T1D_T2D(t1dA: Tensor1D, t2dA: Tensor2D): Tensor1D {
     const o: Tensor1D = [];
 
     for (let i = 0; i < t2dA.length; i++) {
@@ -52,7 +56,7 @@ const Tensor = {
     return o;
   },
 
-  add1DT1D(t1dA: Tensor1D, t1dB: Tensor1D): Tensor1D {
+  add_T1D_T1D(t1dA: Tensor1D, t1dB: Tensor1D): Tensor1D {
     const o: Tensor1D = [];
 
     for (let i = 0; i < t1dA.length; i++) {
@@ -70,6 +74,14 @@ const Tensor = {
     }
 
     return o;
+  },
+
+  join1D(t1dA: Tensor1D, t1dB: Tensor1D): Tensor1D {
+    return [...t1dA, ...t1dB];
+  },
+
+  clip1D(v: Tensor1D, s: number, e: number): Tensor1D {
+    return v.slice(s, e);
   },
 };
 
@@ -114,7 +126,7 @@ class Layer {
   }
 
   fw(x: Tensor1D): Tensor1D {
-    const z = Tensor.add1DT1D(Tensor.mulT1DT2D(x, this.w), this.b);
+    const z = Tensor.add_T1D_T1D(Tensor.mul_T1D_T2D(x, this.w), this.b);
     // const y = z;
     const y = Tensor.map1D(z, (v) => this.activation.fw(v));
 
