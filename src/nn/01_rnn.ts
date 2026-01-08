@@ -40,7 +40,7 @@ const Tensor = {
     return new Array(rows).fill(0).map(() => new Array(cols).fill(0));
   },
 
-  mulT1DT2D(t1dA: Tensor1D, t2dA: Tensor2D): Tensor1D {
+  mul_T1D_T2D(t1dA: Tensor1D, t2dA: Tensor2D): Tensor1D {
     const o: Tensor1D = [];
 
     for (let i = 0; i < t2dA.length; i++) {
@@ -56,7 +56,7 @@ const Tensor = {
     return o;
   },
 
-  add1DT1D(t1dA: Tensor1D, t1dB: Tensor1D): Tensor1D {
+  add_T1D_T1D(t1dA: Tensor1D, t1dB: Tensor1D): Tensor1D {
     const o: Tensor1D = [];
 
     for (let i = 0; i < t1dA.length; i++) {
@@ -107,6 +107,7 @@ const Activations = {
 class Layer {
   xSize: number;
   hSize: number;
+  ySize: number;
 
   history_xs: Tensor1D[] = [];
   history_hs: Tensor1D[] = [];
@@ -115,17 +116,25 @@ class Layer {
 
   x_w: Tensor2D;
   h_w: Tensor2D;
+  y_w: Tensor2D;
   h_b: Tensor1D;
 
   activation: Activation;
 
-  constructor(xSize: number, hSize: number, activation: Activation) {
+  constructor(
+    xSize: number,
+    hSize: number,
+    ySize: number,
+    activation: Activation,
+  ) {
     this.xSize = xSize;
     this.hSize = hSize;
+    this.ySize = ySize;
     this.activation = activation;
 
     this.x_w = Tensor.random2D(hSize, xSize);
     this.h_w = Tensor.random2D(hSize, hSize);
+    this.y_w = Tensor.random2D(ySize, hSize);
     this.h_b = Tensor.random1D(hSize);
 
     this.curr_h = Tensor.zeros1D(hSize);
@@ -133,7 +142,7 @@ class Layer {
 
   resetState() {
     this.history_xs = [];
-    this.history_hs = [];
+    this.history_hs = [Tensor.zeros1D(this.hSize)];
 
     this.curr_h = Tensor.zeros1D(this.hSize);
   }
@@ -142,76 +151,127 @@ class Layer {
     const prev_h = this.curr_h;
 
     this.history_xs.push(curr_x);
-    this.history_hs.push(prev_h);
 
-    // 1. xW * x
-    const x_w_mul_x = Tensor.mulT1DT2D(curr_x, this.x_w);
-    // 2. hW * h_{t-1}
-    const h_w_mul_h = Tensor.mulT1DT2D(prev_h, this.h_w);
+    // step 1
+    // h_{t-1} * h_w
+    const h = Tensor.mul_T1D_T2D(prev_h, this.h_w);
+    // step 2
+    // x       * x_w
+    const x = Tensor.mul_T1D_T2D(curr_x, this.x_w);
 
-    const z = Tensor.add1DT1D(Tensor.add1DT1D(x_w_mul_x, h_w_mul_h), this.h_b);
+    // step 3
+    const h_add_x = Tensor.add_T1D_T1D(h, x);
 
-    this.curr_h = Tensor.map1D(z, (v) => this.activation.fw(v));
+    // step 4
+    const h_add_x_add_h_b = Tensor.add_T1D_T1D(h_add_x, this.h_b);
 
-    return this.curr_h;
+    // step 5
+    const z = Tensor.map1D(h_add_x_add_h_b, (v) => this.activation.fw(v));
+
+    const curr_h = [...z]; // Deep copy
+
+    this.curr_h = curr_h;
+
+    this.history_hs.push(curr_h);
+
+    // step 6
+    // y = curr_h * y_w
+    const y = Tensor.mul_T1D_T2D(this.curr_h, this.y_w);
+
+    return y;
   }
 
   bw(
     // 今の誤差 t
-    curr_h_d: Tensor1D,
+    curr_y_d: Tensor1D,
     // 次の誤差 t+1
     next_h_d: Tensor1D,
     r: number,
   ): Tensor1D {
-    const history_x = this.history_xs.pop()!;
-    const history_h = this.history_hs.pop()!;
+    const curr_x = this.history_xs.pop()!;
+    const curr_h = this.history_hs.pop()!;
+    const prev_h = this.history_hs[this.history_hs.length - 1];
 
-    const dz: Tensor1D = [];
+    // 連鎖律
+    // step 0
+    // curr_y_d
+    const d1 = curr_y_d;
 
-    for (let yi = 0; yi < this.hSize; yi++) {
-      dz[yi] =
-        (curr_h_d[yi] + next_h_d[yi]) * this.activation.bw(this.curr_h[yi]);
+    // step 6
+    // h * w
+    // 微分: w
+    // 残る: h
+    for (let i = 0; i < this.ySize; i++) {
+      for (let j = 0; j < this.hSize; j++) {
+        const h = curr_h[j];
+
+        const dw = d1[i] * h;
+
+        this.y_w[i][j] -= r * dw;
+      }
     }
 
-    const dx_total = Tensor.zeros1D(this.xSize);
-    const dh_total = Tensor.zeros1D(this.hSize);
+    // h * w
+    // 微分: h
+    // 残る: w
+    const d2 = Tensor.zeros1D(this.hSize);
 
-    for (let o = 0; o < this.hSize; o++) {
-      for (let i = 0; i < this.xSize; i++) {
-        // 合計を計算して、前のレイヤーにわたす
-        dx_total[i] += dz[o] * this.x_w[o][i];
-        // w の誤りを知りたい -> 微分すると x がのこる
-        // x * w の w の偏微分
-        const dw_i = dz[o] * history_x[i];
-        // 更新
-        this.x_w[o][i] -= r * dw_i;
+    for (let j = 0; j < this.hSize; j++) {
+      for (let i = 0; i < this.ySize; i++) {
+        const w = this.y_w[i][j];
+
+        const dh = d1[i] * w;
+
+        d2[j] += dh;
       }
 
-      for (let i = 0; i < this.hSize; i++) {
-        // 合計を計算して、前のレイヤーにわたす
-        dh_total[i] += dz[o] * this.h_w[o][i];
-        // w の誤りを知りたい -> 微分すると h がのこる
-        // h * w の w の偏微分
-        const dw_i = dz[o] * history_h[i];
-        // 更新
-        this.h_w[o][i] -= r * dw_i;
-      }
-
-      // b の誤りを知りたい -> 微分すると 1 がのこる
-      this.h_b[o] -= r * dz[o];
+      d2[j] += next_h_d[j];
     }
 
-    this.curr_h = history_h;
+    // step 5
+    // アクティベーション
+    // 微分
+    const d3: Tensor1D = [];
 
-    return dh_total;
+    for (let i = 0; i < this.hSize; i++) {
+      d3[i] = d2[i] * this.activation.bw(curr_h[i]);
+    }
+
+    // step 4
+    for (let i = 0; i < this.hSize; i++) {
+      this.h_b[i] -= r * d3[i] * 1;
+    }
+
+    // step 3 - 1
+    const d4 = Tensor.zeros1D(this.hSize);
+
+    for (let i = 0; i < this.hSize; i++) {
+      for (let j = 0; j < this.xSize; j++) {
+        // x * w
+        // 微分: w
+        // 残る: x
+        this.x_w[i][j] -= r * d3[i] * curr_x[j];
+      }
+
+      for (let j = 0; j < this.hSize; j++) {
+        d4[j] += d3[i] * this.h_w[i][j];
+
+        // h * w
+        // 微分: w
+        // 残る: h
+        this.h_w[i][j] -= r * d3[i] * prev_h[j];
+      }
+    }
+
+    return d4;
   }
 }
 
 class Network {
   layer: Layer;
 
-  constructor(xSize: number, hSize: number) {
-    this.layer = new Layer(xSize, hSize, Activations.sigmoid);
+  constructor(xSize: number, hSize: number, ySize: number) {
+    this.layer = new Layer(xSize, hSize, ySize, Activations.sigmoid);
   }
 
   fw(xSequence: Tensor1D[]): Tensor1D[] {
@@ -242,12 +302,12 @@ class Network {
     }
 
     let next_h_d = Tensor.zeros1D(this.layer.hSize);
-    let curr_h_d = Tensor.zeros1D(this.layer.hSize);
+    let curr_y_d = Tensor.zeros1D(this.layer.hSize);
 
     // 時系列の後（next）から前（current）へと遷移
     for (let t = xSequence.length - 1; t >= 0; t--) {
-      curr_h_d = ds[t];
-      next_h_d = this.layer.bw(curr_h_d, next_h_d, r);
+      curr_y_d = ds[t];
+      next_h_d = this.layer.bw(curr_y_d, next_h_d, r);
     }
   }
 
@@ -275,7 +335,7 @@ const trainingSamples = [
   { x: [[0.6], [0.3], [0.1]], c: [[0], [0], [0]] }, // Decrease
 ];
 
-const network = new Network(1, 1);
+const network = new Network(1, 8, 1);
 
 network.trainAll(trainingSamples, 10000, 0.1);
 
