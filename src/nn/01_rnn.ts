@@ -111,6 +111,7 @@ class Layer {
 
   history_xs: Tensor1D[] = [];
   history_hs: Tensor1D[] = [];
+  history_ys: Tensor1D[] = [];
 
   curr_h: Tensor1D;
 
@@ -166,9 +167,9 @@ class Layer {
     const h_add_x_add_h_b = Tensor.add_T1D_T1D(h_add_x, this.h_b);
 
     // step 5
-    const z = Tensor.map1D(h_add_x_add_h_b, (v) => this.activation.fw(v));
+    const a = Tensor.map1D(h_add_x_add_h_b, (v) => this.activation.fw(v));
 
-    const curr_h = [...z]; // Deep copy
+    const curr_h = [...a]; // Deep copy
 
     this.curr_h = curr_h;
 
@@ -178,7 +179,14 @@ class Layer {
     // y = curr_h * y_w
     const y = Tensor.mul_T1D_T2D(this.curr_h, this.y_w);
 
-    return y;
+    const curr_y = y;
+
+    this.history_ys.push(curr_y);
+
+    // step 7
+    const z = Tensor.map1D(y, (v) => this.activation.fw(v));
+
+    return z;
   }
 
   bw(
@@ -190,12 +198,12 @@ class Layer {
   ): Tensor1D {
     const curr_x = this.history_xs.pop()!;
     const curr_h = this.history_hs.pop()!;
+    const curr_y = this.history_ys.pop()!;
     const prev_h = this.history_hs[this.history_hs.length - 1];
 
-    // 連鎖律
-    // step 0
-    // curr_y_d
-    const d1 = curr_y_d;
+    const d1 = Tensor.map1D(curr_y_d, (val, i) => {
+      return val * this.activation.bw(this.activation.fw(curr_y[i]));
+    });
 
     // step 6
     // h * w
@@ -329,10 +337,22 @@ class Network {
 }
 
 const trainingSamples = [
-  { x: [[0.1], [0.4], [0.7]], c: [[0], [1], [1]] }, // Increase
-  { x: [[0.3], [0.5], [0.9]], c: [[0], [1], [1]] }, // Increase
-  { x: [[0.8], [0.5], [0.2]], c: [[0], [0], [0]] }, // Decrease
-  { x: [[0.6], [0.3], [0.1]], c: [[0], [0], [0]] }, // Decrease
+  {
+    x: [[0.1], [0.2], [0.3], [0.4]], // Increase
+    c: [[0.2], [0.3], [0.4], [0.5]], // next value
+  },
+  {
+    x: [[0.5], [0.6], [0.7], [0.8]], // Increase
+    c: [[0.6], [0.7], [0.8], [0.9]], // next value
+  },
+  {
+    x: [[0.9], [0.8], [0.7], [0.6]], // Decrease
+    c: [[0.8], [0.7], [0.6], [0.5]], // next value
+  },
+  {
+    x: [[0.4], [0.3], [0.2], [0.1]], // Decrease
+    c: [[0.3], [0.2], [0.1], [0.0]], // next value
+  },
 ];
 
 const network = new Network(1, 8, 1);
@@ -340,8 +360,8 @@ const network = new Network(1, 8, 1);
 network.trainAll(trainingSamples, 10000, 0.1);
 
 const samples = [
-  [[0.2], [0.5], [0.8]], // Unknown Increase Data
-  [[0.9], [0.6], [0.3]], // Unknown Decrease Data
+  [[0.3], [0.4], [0.5]], // Unknown Increase Data
+  [[0.7], [0.6], [0.5]], // Unknown Decrease Data
 ];
 
 for (const sample of samples) {
